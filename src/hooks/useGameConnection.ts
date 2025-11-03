@@ -1,0 +1,105 @@
+// src/hooks/useGameConnection.ts
+import { useState, useCallback } from "react";
+import {nowInSec, uuidV4, SkyWayStreamFactory, SkyWayContext, SkyWayRoom, SkyWayAuthToken } from '@skyway-sdk/room';
+
+
+const token = new SkyWayAuthToken({
+  jti: uuidV4(),
+  iat: nowInSec(),
+  exp: nowInSec() + 60 * 60 * 24,
+  version: 3,
+  scope: {
+    appId: "c9b7bc82-5d20-433a-9c68-50845f184aae",
+    rooms: [
+      {
+        name: "*",
+        methods: ["create", "close", "updateMetadata"],
+        member: {
+          name: "*",
+          methods: ["publish", "subscribe", "updateMetadata"],
+        },
+      },
+    ],
+  },
+}).encode("ctnY2UtA3GH7K5/4LS3BMg6VdHGfK0YJfcO2IJIiZQ8=");
+
+export function useGameConnection() {
+  const [me, setMe] = useState<any>(null);
+  const [dataStream, setDataStream] = useState(null);
+  const [players, setPlayers] = useState<{id:string, nickname:string}[]>([]);
+
+  /**  トークン取得とContext初期化 */
+  const initContext = useCallback(async () => {
+    const context = await SkyWayContext.Create(token);
+    return context;
+  }, []);
+
+  /**  ルーム参加 */
+  const joinRoom = useCallback(async (roomName: string, displayName: string, receiver: any) => {
+    const context = await initContext();
+    //const room = await SkyWayRoom.FindOrCreate(context, { name: roomName });
+    const room = await SkyWayRoom.FindOrCreate(context, {
+      type: 'p2p',
+      name: roomName,
+    });
+    const me = await room.join({ metadata: displayName });
+    setMe(me);
+
+    const data:any = await SkyWayStreamFactory.createDataStream();
+    await me.publish(data);
+    await setDataStream(data);
+
+    room.publications.forEach(async (p) => {
+      // 自分のは subscribe しない
+      console.log(p.publisher.metadata);
+      if (p.publisher.id === me.id) return;
+      if (p.contentType !== "data") return;
+      // すでに subscribe 済みならスキップ
+      const already = me.subscriptions.some(sub => sub.publication.id === p.id);
+      if (!already) {
+	setPlayers((prev:any)=>{
+	  return([...prev, {id:p.publisher.id, nickname:p.publisher.metadata}]);
+	})
+        const sub = await me.subscribe(p);
+        //console.log(p);
+        // @ts-ignore
+        sub.stream.onData.add((d:any)=>{
+          const mesg = JSON.parse(d);
+          receiver(mesg);
+        });
+      }
+    });
+    setPlayers((prev:any)=>{
+      return([...prev, {id:me.id, nickname:me.metadata}]);
+    })
+
+    room.onStreamPublished.add(async (e) => {
+      console.log(e.publication.publisher.metadata);
+      if (e.publication.publisher.id !== me.id && e.publication.contentType === "data") {
+        console.log({new:e.publication.publisher.id, me:me.id});
+	setPlayers((prev:any)=>{
+	  return([...prev, {id:e.publication.publisher.id, nickname:e.publication.publisher.metadata}]);
+	})
+        const sub = await me.subscribe(e.publication);
+        // @ts-ignore
+        sub.stream.onData?.add((d:any)=>{
+          const mesg = JSON.parse(d);
+          if (mesg.newstate !== null) {
+            //setGameState(mesg.newstate);
+            receiver(mesg);
+          }
+        });
+      }
+    });
+
+  }, [initContext]);
+
+
+
+  return {
+    me,
+    dataStream,
+    joinRoom,
+    players
+  };
+}
