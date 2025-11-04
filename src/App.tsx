@@ -166,10 +166,14 @@ function App() {
     let ny = y + dy;
     const val = board.get(key(nx, ny));
     while (isValidCell(nx, ny) && board.has(key(nx,ny)) && val !== undefined && val>=0 ) {
-      const other = board.get(key(nx, ny));
+      const other:number = board.get(key(nx, ny))??(-1);
       if (other === player) {
 	return flips.length > 0 ? flips : [];
-      } else {
+      }
+      else if (other < 0){
+	return []
+      }
+      else {
 	flips.push(key(nx, ny));
       }
       nx += dx;
